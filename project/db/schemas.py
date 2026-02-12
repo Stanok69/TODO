@@ -20,6 +20,9 @@ class UserOut(BaseModel):
 class AuthOut(BaseModel):
     user_id: int
     username: str
+    token: str
+    token_type: str = "Bearer"
+    expires_at: datetime
 
 
 class TodoCreate(BaseModel):

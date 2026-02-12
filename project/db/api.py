@@ -1,21 +1,27 @@
+from datetime import datetime, timedelta
+import secrets
+
 import bcrypt
 from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from connection import get_db_session
+from config import TOKEN_EXPIRE_MINUTES
 from database import init_db
-from models import Todo, User
+from models import Todo, Token, User
 from schemas import (
+    AuthOut,
     TodoCreate,
     TodoOut,
     TodoUpdate,
-    AuthOut,
     UserCreate,
     UserOut,
 )
 
 app = FastAPI(title="Todo API")
+security = HTTPBearer()
 
 
 @app.on_event("startup")
@@ -23,22 +29,43 @@ def on_startup():
     init_db()
 
 
+def create_auth_token(session: Session, user: User) -> Token:
+    created_at = datetime.utcnow()
+    expires_at = created_at + timedelta(minutes=TOKEN_EXPIRE_MINUTES)
+    token_value = secrets.token_urlsafe(32)
+    auth_token = Token(
+        user_id=user.id,
+        token=token_value,
+        created_at=created_at,
+        expires_at=expires_at,
+    )
+    session.add(auth_token)
+    session.commit()
+    session.refresh(auth_token)
+    return auth_token
+
+
 def get_current_user(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
     session: Session = Depends(get_db_session),
-    user_id: int | None = None,
 ) -> User:
-    if not user_id:
+    stmt = select(Token).where(Token.token == credentials.credentials)
+    auth_token = session.execute(stmt).scalar_one_or_none()
+    if not auth_token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Missing user_id",
+            detail="Invalid or missing token",
         )
-    user = session.get(User, user_id)
-    if not user:
+
+    if auth_token.expires_at <= datetime.utcnow():
+        session.delete(auth_token)
+        session.commit()
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="User not found",
+            detail="Token expired",
         )
-    return user
+
+    return auth_token.user
 
 
 @app.post("/auth/register", response_model=UserOut)
@@ -72,15 +99,20 @@ def login(payload: UserCreate, session: Session = Depends(get_db_session)):
     )
     if not ok:
         raise HTTPException(status_code=401, detail="Invalid username or password")
-    return AuthOut(user_id=user.id, username=user.username)
+    auth_token = create_auth_token(session=session, user=user)
+    return AuthOut(
+        user_id=user.id,
+        username=user.username,
+        token=auth_token.token,
+        expires_at=auth_token.expires_at,
+    )
 
 
 @app.get("/todos", response_model=list[TodoOut])
 def list_todos(
-    user_id: int,
+    current_user: User = Depends(get_current_user),
     session: Session = Depends(get_db_session),
 ):
-    current_user = get_current_user(session=session, user_id=user_id)
     stmt = select(Todo).where(Todo.user_id == current_user.id).order_by(Todo.id)
     return list(session.execute(stmt).scalars().all())
 
@@ -88,10 +120,9 @@ def list_todos(
 @app.post("/todos", response_model=TodoOut, status_code=201)
 def create_todo(
     payload: TodoCreate,
-    user_id: int,
+    current_user: User = Depends(get_current_user),
     session: Session = Depends(get_db_session),
 ):
-    current_user = get_current_user(session=session, user_id=user_id)
     todo = Todo(user_id=current_user.id, task=payload.task, is_completed=False)
     session.add(todo)
     session.commit()
@@ -103,10 +134,9 @@ def create_todo(
 def update_todo(
     todo_id: int,
     payload: TodoUpdate,
-    user_id: int,
+    current_user: User = Depends(get_current_user),
     session: Session = Depends(get_db_session),
 ):
-    current_user = get_current_user(session=session, user_id=user_id)
     todo = session.execute(
         select(Todo).where(Todo.id == todo_id, Todo.user_id == current_user.id)
     ).scalar_one_or_none()
@@ -124,10 +154,9 @@ def update_todo(
 @app.post("/todos/{todo_id}/toggle", response_model=TodoOut)
 def toggle_todo(
     todo_id: int,
-    user_id: int,
+    current_user: User = Depends(get_current_user),
     session: Session = Depends(get_db_session),
 ):
-    current_user = get_current_user(session=session, user_id=user_id)
     todo = session.execute(
         select(Todo).where(Todo.id == todo_id, Todo.user_id == current_user.id)
     ).scalar_one_or_none()
@@ -142,10 +171,9 @@ def toggle_todo(
 @app.delete("/todos/{todo_id}")
 def delete_todo(
     todo_id: int,
-    user_id: int,
+    current_user: User = Depends(get_current_user),
     session: Session = Depends(get_db_session),
 ):
-    current_user = get_current_user(session=session, user_id=user_id)
     todo = session.execute(
         select(Todo).where(Todo.id == todo_id, Todo.user_id == current_user.id)
     ).scalar_one_or_none()

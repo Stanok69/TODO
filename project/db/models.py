@@ -17,6 +17,10 @@ class User(Base):
         back_populates="user",
         cascade="all, delete-orphan",
     )
+    tokens: Mapped[list["Token"]] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
 
 
 class Todo(Base):
@@ -30,3 +34,14 @@ class Todo(Base):
 
     user: Mapped[User] = relationship(back_populates="todos")
 
+
+class Token(Base):
+    __tablename__ = "tokens"
+
+    token_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    token: Mapped[str] = mapped_column(String(255), unique=True, nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+    user: Mapped[User] = relationship(back_populates="tokens")
