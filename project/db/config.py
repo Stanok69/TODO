@@ -8,8 +8,7 @@ DB_CONFIG = {
 }
 
 SQLALCHEMY_DATABASE_URL = (
-    f"postgresql+psycopg2://{DB_CONFIG['user']}:{DB_CONFIG['password']}"
-    f"@{DB_CONFIG['host']}/{DB_CONFIG['dbname']}"
+    f"postgresql+psycopg2://{DB_USER}:{DB_PASSWORD}@{DB_HOST}/{DB_NAME}"
 )
 
 TOKEN_EXPIRE_MINUTES = 60

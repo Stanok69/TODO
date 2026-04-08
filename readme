@@ -1,0 +1,4 @@
+docker network create todo-net
+docker run -d --name todo-db --network todo-net -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=123 -e POSTGRES_DB=postgres postgres:15
+
+docker run --rm -it --network todo-net -e DB_HOST=todo-db -e DB_USER=postgres -e DB_PASSWORD=123 -e DB_NAME=postgres todo-app

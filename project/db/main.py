@@ -1,11 +1,98 @@
 import sys
+from datetime import datetime
+from typing import Generator
 
 import bcrypt
-from sqlalchemy import select
+from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session
 
-from database import init_db
-from database import SessionLocal
-from models import Todo, User
+from database import SessionLocal, init_db
+from models import Token, Todo, User
+
+app = FastAPI()
+security = HTTPBearer(auto_error=False)
+
+
+def get_db() -> Generator[Session, None, None]:
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
+def get_current_user(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    db: Session = Depends(get_db),
+) -> User:
+    if not credentials or credentials.scheme.lower() != "bearer":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid authentication credentials",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    token_value = credentials.credentials
+    token = db.execute(select(Token).where(Token.token == token_value)).scalar_one_or_none()
+    if not token or token.expires_at < datetime.utcnow():
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    user = db.execute(select(User).where(User.id == token.user_id)).scalar_one_or_none()
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User not found",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    return user
+
+
+@app.on_event("startup")
+def startup_event() -> None:
+    init_db()
+
+
+@app.get("/todos/incomplete")
+def read_incomplete_todos(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    todos = db.execute(
+        select(Todo)
+        .where(Todo.user_id == current_user.id)
+        .where(Todo.is_completed.is_(False))
+        .order_by(Todo.id)
+    ).scalars().all()
+    return [
+        {
+            "id": todo.id,
+            "task": todo.task,
+            "is_completed": todo.is_completed,
+            "created_at": todo.created_at.isoformat() if todo.created_at else None,
+        }
+        for todo in todos
+    ]
+
+
+@app.get("/todos/count_incomplete")
+def count_incomplete_todos(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    incomplete_count = db.execute(
+        select(func.count())
+        .select_from(Todo)
+        .where(Todo.user_id == current_user.id)
+        .where(Todo.is_completed.is_(False))
+    ).scalar_one()
+    return {"incomplete_count": incomplete_count}
 
 
 class TodoApp:
@@ -181,8 +268,5 @@ class TodoApp:
 
 
 if __name__ == "__main__":
-    try:
-        app = TodoApp()
-        app.start()
-    except KeyboardInterrupt:
-        print("\nGoodbye!")
+    # FastAPI should be started via Uvicorn: uvicorn main:app --host 0.0.0.0 --port 8000
+    pass
